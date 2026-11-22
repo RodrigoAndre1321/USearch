@@ -1465,7 +1465,7 @@ class growing_hash_set_gt {
                 while (new_slots[new_index] != default_free_value<element_t>())
                     new_index = (new_index + 1) & (new_capacity - 1);
                 new_slots[new_index] = slots_[old_index];
-            }
+            }35
         }
 
         reset();
@@ -1736,6 +1736,10 @@ struct index_search_config_t {
 
     /// @brief Brute-forces exhaustive search over all entries in the index.
     bool exact = false;
+    /// @brief variable utilizada para indicar si se debe usar ABS en la busqueda
+    bool use_ABS = false;
+    /// @brief variable gamma segun el paper de ABS para controlar el umbral adaptivo de busqueda
+    double gamma = 0.0;
 };
 
 struct index_cluster_config_t {
@@ -3499,21 +3503,43 @@ class index_gt {
             if (!top.reserve(wanted))
                 return result.failed("Out of memory!");
             search_exact_(query, metric, predicate, wanted, context);
-        } else {
+        }
+        else
+        {
+            if(config.use_ABS){
+                double factor = (config.gamma + 1.0) * (config.gamma + 1.0);
+                if (!std::isfinite(config.gamma) || config.gamma < 0.0 || !std::isfinite(factor) ) {
+                    return result.failed("Error en la configuracion de Gamma");
+                }
+            }
             next_candidates_t& next = context.next_candidates;
             std::size_t expansion = (std::max)(config.expansion, wanted);
             usearch_assert_m(expansion > 0, "Expansion factor can't be a zero!");
+
             if (!next.reserve(expansion))
                 return result.failed("Out of memory!");
-            if (!top.reserve(expansion))
-                return result.failed("Out of memory!");
+            if(config.use_ABS){
+                if(!top.reserve(wanted)){
+                    return result.failed("Out of memory!");
+                }
+            }
+            else {
+                if (!top.reserve(expansion)) return result.failed("Out of memory!");
+            }
 
             compressed_slot_t closest_slot = search_for_one_(
                 query, metric, prefetch, static_cast<compressed_slot_t>(entry_slot_), max_level_, 0, context);
-
+            if(config.use_ABS){
+                //verificacion si gamma es valido
+                if(!search_to_find_in_base_ABS_(query, metric, predicate, prefetch, closest_slot, wanted, config.gamma, context)){
+                    return result.failed("Fallo en la busqueda ABS, insufficient memory");
+                }
+            }
             // For bottom layer we need a more optimized procedure
-            if (!search_to_find_in_base_(query, metric, predicate, prefetch, closest_slot, expansion, context))
-                return result.failed("Out of memory!");
+            else {
+                if (!search_to_find_in_base_(query, metric, predicate, prefetch, closest_slot, expansion, context))
+                    return result.failed("Out of memory!");
+            }
         }
 
         top.sort_ascending();
@@ -4788,6 +4814,83 @@ class index_gt {
 
         return true;
     }
+    //  Mi nueva funcion de encontrar en la capa base pero ahora con ABS
+    template <typename value_at,typename metric_at,typename predicate_at,typename prefetch_at>
+    bool search_to_find_in_base_ABS_(                                                               //
+        value_at&& query, metric_at&& metric, predicate_at&& predicate, prefetch_at&& prefetch, //
+        compressed_slot_t start_slot, std::size_t k, double gamma, context_t& context) const usearch_noexcept_m 
+        {
+            if(k == 0 || !std::isfinite(gamma) || gamma < 0.0){
+                return false;
+            }
+            double factor_adaptativo = (1.0+gamma) *(1.0+gamma);
+            if(!std::isfinite(factor_adaptativo)){
+                return false;
+            }
+            visits_hash_set_t& visits = context.visits;
+            next_candidates_t& next = context.next_candidates; // pop min, push
+            top_candidates_t& top = context.top_candidates;    // pop max, push
+            std::size_t const top_limit = k;
+            visits.clear();
+            next.clear();
+            top.clear();
+            if (!visits.reserve(config_.connectivity_base + 1u)){
+                return false;
+            }
+            if(!next.reserve(1)) return false;
+            if(!top.reserve(k)) return false;
+            if(!is_dummy<prefetch_at>()) prefetch(citerator_at(start_slot), citerator_at(start_slot) + 1);
+            distance_t distancia = context.measure(query, citerator_at(start_slot), metric);
+            next.insert_reserved({-distancia, start_slot});
+            visits.set(start_slot);
+            if (is_dummy<predicate_at>() || predicate(member_cref_t{node_at_(start_slot).ckey(), start_slot})) {
+                top.insert_reserved({distancia, start_slot});
+            }
+            while(!next.empty())
+            {
+                candidate_t candidato = next.top();
+                distance_t distancia_candidato = -candidato.distance;
+                if( top.size() == k )
+                {
+                    distance_t distancia_K = top.top().distance;
+                    double umbral = factor_adaptativo * distancia_K;
+                    if(static_cast<double>(distancia_candidato) > umbral) break;
+                }
+                next.pop();
+                context.iteration_cycles++;
+                neighbors_ref_t candidate_neighbors = neighbors_base_(node_at_(candidato.slot));
+                if (!is_dummy<prefetch_at>()) {
+                    candidates_range_t missing_candidates{*this, candidate_neighbors, visits};
+                    prefetch(missing_candidates.begin(), missing_candidates.end());
+                }
+                // Assume the worst-case when reserving memory
+                if (!visits.reserve(visits.size() + candidate_neighbors.size())){
+                    return false;
+                }
+                for (compressed_slot_t successor_slot : candidate_neighbors) 
+                {
+
+                    if (visits.set(successor_slot)) continue;
+                    distance_t sucesor_distancia = context.measure(query, citerator_at(successor_slot), metric);
+                    bool sePuede = top.size() < k;
+                    if(!sePuede){
+                        distance_t distancia_K = top.top().distance;
+                        double umbral = factor_adaptativo * distancia_K;
+                        sePuede = static_cast<double>(sucesor_distancia) <= umbral;
+                    }
+                    if(sePuede)
+                    {
+                        if(!next.insert({-sucesor_distancia, successor_slot})){
+                            return false;
+                        }
+                        if (is_dummy<predicate_at>() || predicate(member_cref_t{node_at_(successor_slot).ckey(), successor_slot})) {
+                            top.insert({sucesor_distancia, successor_slot}, top_limit);
+                        }
+                    }
+                }
+            }
+            return true;
+        }
 
     /**
      *  @brief  Iterates through all members, without actually touching the index.
@@ -4841,7 +4944,7 @@ class index_gt {
      *          that massively reduces the number of connections a point has,
      *          to keep only the neighbors, that are from each other.
      *
-     *  @param[in] override_slot  Optional slot whose stored vector is stale (e.g. during update,
+     *  @param[in] overridfe_slot  Optional slot whose stored vector is stale (e.g. during update,
      *                            where the callback has not yet committed the new vector).
      *                            When set, inter-result distances involving this slot will use
      *                            @p override_value instead of reading from `citerator_at()`.

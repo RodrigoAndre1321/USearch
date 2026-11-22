@@ -892,7 +892,14 @@ class index_dense_gt {
     search_result_t search(i8_t const* vector, std::size_t wanted, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, dummy_predicate_t {}, thread, exact, casts_.from.i8); }
     search_result_t search(u8_t const* vector, std::size_t wanted, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, dummy_predicate_t {}, thread, exact, casts_.from.u8); }
     search_result_t search(b1x8_t const* vector, std::size_t wanted, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, dummy_predicate_t {}, thread, exact, casts_.from.b1x8); }
-
+    search_result_t search_abs(f32_t const* vector, std::size_t wanted, double gamma, std::size_t thread = any_thread()) const {
+        if (metric_kind() != metric_kind_t::l2sq_k) {
+            return search_result_t{*this}.failed(
+                "El ABS actualmente solo es compatible con la métrica L2SQ. Por favor, use el método de búsqueda normal para otras métricas."
+            );
+        }
+        return search_(vector, wanted, dummy_predicate_t {}, thread, false, casts_.from.f32,true ,gamma);
+    }
     template <typename predicate_at> search_result_t filtered_search(f64_t const* vector, std::size_t wanted, predicate_at&& predicate, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, std::forward<predicate_at>(predicate), thread, exact, casts_.from.f64); }
     template <typename predicate_at> search_result_t filtered_search(f32_t const* vector, std::size_t wanted, predicate_at&& predicate, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, std::forward<predicate_at>(predicate), thread, exact, casts_.from.f32); }
     template <typename predicate_at> search_result_t filtered_search(bf16_t const* vector, std::size_t wanted, predicate_at&& predicate, std::size_t thread = any_thread(), bool exact = false) const { return search_(vector, wanted, std::forward<predicate_at>(predicate), thread, exact, casts_.from.bf16); }
@@ -2240,7 +2247,7 @@ class index_dense_gt {
 
     template <typename scalar_at, typename predicate_at>
     search_result_t search_(scalar_at const* vector, std::size_t wanted, predicate_at&& predicate, std::size_t thread,
-                            bool exact, cast_punned_t const& cast) const {
+                            bool exact, cast_punned_t const& cast, bool use_ABS = false, double gamma = 0.0 ) const {
 
         // Cast the vector, if needed for compatibility with `metric_`
         thread_lock_t lock = thread_lock_(thread);
@@ -2258,7 +2265,8 @@ class index_dense_gt {
         search_config.thread = lock.thread_id;
         search_config.expansion = config_.expansion_search;
         search_config.exact = exact;
-
+        search_config.use_ABS = use_ABS;
+        search_config.gamma = gamma;
         vector_key_t free_key_copy = free_key_;
         if (std::is_same<typename std::decay<predicate_at>::type, dummy_predicate_t>::value) {
             auto allow = [free_key_copy](member_cref_t const& member) noexcept {
