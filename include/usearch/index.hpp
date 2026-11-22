@@ -1465,7 +1465,7 @@ class growing_hash_set_gt {
                 while (new_slots[new_index] != default_free_value<element_t>())
                     new_index = (new_index + 1) & (new_capacity - 1);
                 new_slots[new_index] = slots_[old_index];
-            }35
+            }
         }
 
         reset();

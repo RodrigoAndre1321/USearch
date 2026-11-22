@@ -23,3 +23,10 @@ target_include_directories(
     PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../include"
 )
+add_executable(benchmark_real benchmark_real.cpp)
+
+target_include_directories(
+    benchmark_real
+    PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+)
