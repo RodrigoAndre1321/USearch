@@ -30,3 +30,10 @@ target_include_directories(
     PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../include"
 )
+add_executable(benchmark_deep1b benchmark_deep1b.cpp)
+
+target_include_directories(
+    benchmark_deep1b
+    PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+)
