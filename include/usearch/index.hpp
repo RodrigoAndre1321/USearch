@@ -4816,8 +4816,8 @@ class index_gt {
     }
     //  Mi nueva funcion de encontrar en la capa base pero ahora con ABS
     template <typename value_at,typename metric_at,typename predicate_at,typename prefetch_at>
-    bool search_to_find_in_base_ABS_(                                                               //
-        value_at&& query, metric_at&& metric, predicate_at&& predicate, prefetch_at&& prefetch, //
+    bool search_to_find_in_base_ABS_(                                                              
+        value_at&& query, metric_at&& metric, predicate_at&& predicate, prefetch_at&& prefetch, 
         compressed_slot_t start_slot, std::size_t k, double gamma, context_t& context) const usearch_noexcept_m 
         {
             if(k == 0 || !std::isfinite(gamma) || gamma < 0.0){

@@ -8,13 +8,14 @@
 #include <iomanip>
 #include <cstdint>
 #include <stdexcept>
-
+#include <thread>
+#include <atomic>
 #include <usearch/index.hpp>
 #include <usearch/index_dense.hpp>
 
 using namespace std;
 using namespace unum::usearch;
-
+constexpr size_t HILOS = 4;
 constexpr size_t N_TOTAL = 9990000;
 constexpr size_t Q = 100;
 constexpr size_t DIM = 96;
@@ -82,7 +83,7 @@ double calcularRecall(
     return static_cast<double>(aciertos) / K;
 }
 
-// Construir HNSW leyendo el archivo por bloques.
+
 bool construirIndice(
     index_dense_t& index,
     size_t cantidad
@@ -121,21 +122,60 @@ bool construirIndice(
             return false;
         }
 
-        for (size_t j = 0; j < leer; j++) {
+        // Control de errores entre hilos
+        std::atomic<bool> errorInsercion{false};
+        std::atomic<size_t> idError{0};
 
-            const float* vector =
-                bloque.data() + j * DIM;
+        // Crear los trabajadores
+        std::vector<std::thread> trabajadores;
+        trabajadores.reserve(HILOS);
 
-            auto resultado = index.add(
-                insertados + j,
-                vector
-            );
+        for (size_t hilo = 0; hilo < HILOS; ++hilo) {
 
-            if (!resultado) {
-                cerr << "Error insertando ID "
-                     << insertados + j << "\n";
-                return false;
-            }
+            trabajadores.emplace_back([&, hilo]() {
+
+                const size_t comienzo =
+                    (leer * hilo) / HILOS;
+
+                const size_t final =
+                    (leer * (hilo + 1)) / HILOS;
+
+                // Cada hilo procesa su rango
+                for (size_t j = comienzo; j < final; ++j) {
+
+                    if (errorInsercion.load())
+                        break;
+
+                    const float* vector =
+                        bloque.data() + j * DIM;
+
+                    const size_t id = insertados + j;
+
+                    // Tercer argumento: identificador del hilo
+                    auto resultado = index.add(
+                        id,
+                        vector,
+                        hilo
+                    );
+
+                    if (!resultado) {
+                        idError.store(id);
+                        errorInsercion.store(true);
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Esperar a que terminen todos los hilos
+        for (auto& trabajador : trabajadores) {
+            trabajador.join();
+        }
+
+        if (errorInsercion.load()) {
+            cerr << "Error insertando ID "
+                 << idError.load() << "\n";
+            return false;
         }
 
         insertados += leer;
@@ -261,7 +301,7 @@ int main(int argc, char** argv) {
 
     index_dense_t index = index_dense_t::make(metric);
 
-    if (!(bool)index.try_reserve(cantidad)) {
+    if (!(bool)index.try_reserve(index_limits_t(cantidad, HILOS))) {
         cerr << "No se pudo reservar memoria\n";
         return 1;
     }
@@ -280,12 +320,27 @@ int main(int argc, char** argv) {
 
     cerr << "Indice construido: "
          << index.size() << " vectores\n";
+         size_t presentes = 0;
 
+    for (size_t id = 0; id < cantidad; ++id) {
+        if (index.contains(id)) {
+            ++presentes;
+        }
+    }
+
+    cerr << "IDs presentes: "
+        << presentes << "/"
+        << cantidad << "\n";
     cerr << "Tiempo de construccion: "
          << segundos << " segundos\n";
 
     // Prueba parcial: solo verificar que busca.
-    if (cantidad != N_TOTAL && cantidad != 200000) {
+    const bool tieneGroundTruth =
+    cantidad == 200000 ||
+    cantidad == 1000000 ||
+    cantidad == 4000000 ||
+    cantidad == N_TOTAL;
+    if (!tieneGroundTruth) {
 
         vector<float> consultas;
 
@@ -319,9 +374,18 @@ int main(int argc, char** argv) {
     vector<float> consultas;
     vector<int32_t> vecinosExactos;
     string archivoVecinos =
-    cantidad == N_TOTAL
-        ? CARPETA + "\\neighbors.bin"
-        : CARPETA + "\\neighbors_200k.bin";
+    CARPETA + "\\neighbors_" +
+    to_string(cantidad) + ".bin";
+
+    // Compatibilidad con los archivos anteriores
+    if (cantidad == 200000) {
+        archivoVecinos =
+            CARPETA + "\\neighbors_200k.bin";
+    }
+    else if (cantidad == 1000000) {
+        archivoVecinos =
+            CARPETA + "\\neighbors_1m.bin";
+    }
     if (!leerBinario(
             CARPETA + "\\test.bin",
             consultas,

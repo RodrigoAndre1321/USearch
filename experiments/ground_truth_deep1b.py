@@ -1,11 +1,19 @@
 import numpy as np
+import sys
 from pathlib import Path
 
 carpeta = Path(
     r"D:\PROYECTOEDAD\ann_datasets\deep1b_bin"
 )
 
-N = 200000
+N_TOTAL = 9990000
+
+N = int(sys.argv[1]) if len(sys.argv) > 1 else 1000000
+
+if not 10 <= N <= N_TOTAL:
+    raise ValueError(
+        f"N debe estar entre 10 y {N_TOTAL}"
+    )
 Q = 100
 DIM = 96
 K = 10
@@ -15,9 +23,9 @@ print("Cargando consultas...")
 
 consultas = np.fromfile(
     carpeta / "test.bin",
-    dtype="<f4"
+    dtype="<f4",
+    count=Q * DIM
 ).reshape(Q, DIM)
-
 # Leer train.bin sin cargarlo completamente en RAM.
 train = np.memmap(
     carpeta / "train.bin",
@@ -113,10 +121,13 @@ for inicio in range(0, N, BLOQUE):
 
     print(f"Procesados: {fin}/{N}")
 
-# Guardar vecinos exactos
+archivo_salida = carpeta / f"neighbors_{N}.bin"
+
 mejores_ids.astype("<i4").tofile(
-    carpeta / "neighbors_200k.bin"
+    archivo_salida
 )
+
+print("Archivo generado:", archivo_salida)
 
 print("\nGround truth generado")
 print("Forma:", mejores_ids.shape)
